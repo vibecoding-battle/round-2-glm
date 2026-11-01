@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Paris 3D — Vue aérienne interactive, dimensions réelles</title>
+<meta name="description" content="Survol 3D de Paris : chaque bâtiment à sa taille réelle, hauteurs OpenStreetMap, vols caméra vers les monuments.">
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; overflow: hidden; }
+body {
+  font-family: 'Bricolage Grotesque', system-ui, 'Segoe UI', sans-serif;
+  --glass: rgba(13, 17, 30, .78);
+  --brd: rgba(255, 255, 255, .10);
+  --ink: #eef1f8;
+  --ink-dim: rgba(238, 241, 248, .70);
+  --acc: #efa85f;
+  --chipbg: rgba(255, 255, 255, .07);
+  --shadow: 0 12px 36px rgba(2, 5, 14, .45);
+}
+body[data-mode="day"] {
+  color-scheme: light;
+  --glass: rgba(248, 249, 252, .84);
+  --brd: rgba(18, 32, 56, .14);
+  --ink: #1b2434;
+  --ink-dim: rgba(27, 36, 52, .68);
+  --acc: #c96b2e;
+  --chipbg: rgba(27, 36, 52, .05);
+  --shadow: 0 12px 32px rgba(20, 35, 66, .18);
+}
+#map { position: fixed; inset: 0; }
+#map canvas { cursor: crosshair; }
+.vignette {
+  position: fixed; inset: 0; z-index: 3; pointer-events: none;
+  opacity: .6; transition: opacity .8s;
+  background: radial-gradient(130% 100% at 50% 36%, transparent 50%, rgba(3, 6, 15, .55) 100%);
+}
+body[data-mode="day"] .vignette { opacity: .18; }
+
+.panel {
+  background: var(--glass); border: 1px solid var(--brd); border-radius: 16px;
+  -webkit-backdrop-filter: blur(12px) saturate(1.25); backdrop-filter: blur(12px) saturate(1.25);
+  box-shadow: var(--shadow); user-select: none;
+}
+:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
+
+.brand { position: fixed; top: 18px; left: 18px; z-index: 6; display: flex; align-items: center; gap: 12px; padding: 12px 18px 12px 13px; }
+.logo { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 11px; border: 1px solid var(--brd); background: var(--chipbg); color: var(--acc); }
+.brand h1 { margin: 0; font-size: 20px; font-weight: 800; letter-spacing: .16em; color: var(--ink); line-height: 1; }
+.brand h1 span { color: var(--acc); }
+.brand .sub { margin-top: 4px; font: 500 10px/1.2 'Bricolage Grotesque', sans-serif; letter-spacing: .2em; text-transform: uppercase; color: var(--ink-dim); }
+
+.controls { position: fixed; top: 18px; right: 18px; z-index: 6; width: 208px; padding: 12px; display: flex; flex-direction: column; gap: 9px; }
+.seg { display: flex; gap: 3px; padding: 3px; border-radius: 11px; background: var(--chipbg); border: 1px solid var(--brd); }
+.seg button {
+  flex: 1; padding: 7px 0; border: 0; border-radius: 8px; background: transparent;
+  color: var(--ink-dim); font: 600 12.5px/1 'Bricolage Grotesque', sans-serif; cursor: pointer; transition: color .25s, background .25s;
+}
+.seg button:hover { color: var(--ink); }
+.seg button.active { background: var(--acc); color: #16131c; font-weight: 700; }
+.toggle {
+  position: relative; display: block; width: 100%; padding: 9px 30px 9px 13px; border-radius: 999px;
+  border: 1px solid var(--brd); background: var(--chipbg); color: var(--ink);
+  font: 500 12.5px/1 'Bricolage Grotesque', sans-serif; text-align: left; cursor: pointer; transition: color .25s, border-color .25s, background .25s, box-shadow .25s;
+}
+.toggle:hover { border-color: var(--acc); color: var(--acc); }
+.toggle:focus-visible { color: var(--acc); }
+.toggle::after {
+  content: ''; position: absolute; right: 13px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px;
+  border-radius: 50%; background: var(--ink-dim); transition: background .25s, box-shadow .25s;
+}
+.toggle.on { background: var(--acc); border-color: var(--acc); color: #16131c; font-weight: 700; box-shadow: 0 5px 16px rgba(3, 7, 16, .4); }
+.toggle.on::after { background: #16131c; }
+.hint { font: 400 10.5px/1.55 'Bricolage Grotesque', sans-serif; color: var(--ink-dim); }
+
+.chips-wrap { position: fixed; left: 18px; bottom: 18px; z-index: 6; width: min(340px, calc(100vw - 36px)); padding: 13px; }
+.grouplabel { font: 500 11px/1 'Bricolage Grotesque', sans-serif; letter-spacing: .06em; color: var(--ink-dim); margin-bottom: 10px; }
+#chips { display: flex; flex-wrap: wrap; gap: 6px; max-height: 150px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--brd) transparent; }
+.chip {
+  padding: 6.5px 12px; border-radius: 999px; border: 1px solid var(--brd); background: var(--chipbg); color: var(--ink);
+  font: 500 12.5px/1.2 'Bricolage Grotesque', sans-serif; cursor: pointer; transition: transform .2s, border-color .2s, color .2s, background .2s;
+}
+.chip:hover { transform: translateY(-1px); border-color: var(--acc); color: var(--acc); }
+.chip.active { background: var(--acc); border-color: var(--acc); color: #16131c; font-weight: 700; }
+.credits { margin-top: 11px; font: 400 10px/1.5 'Bricolage Grotesque', sans-serif; color: var(--ink-dim); }
+
+.legend { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 5; width: 240px; padding: 11px 15px 10px; border-radius: 14px; }
+.legend .bar { height: 10px; border-radius: 6px; margin: 8px 0 5px; border: 1px solid var(--brd); transition: background .6s; }
+.l-scale { position: relative; display: flex; justify-content: space-between; font: 400 9.5px/1 'Space Mono', monospace; color: var(--ink-dim); }
+  .l-scale span:nth-child(2) { position: absolute; left: 46.9%; transform: translateX(-50%); }
+
+.tip {
+  position: fixed; left: 0; top: 0; z-index: 9; pointer-events: none; opacity: 0; transition: opacity .18s;
+  padding: 7px 11px; border-radius: 10px; background: var(--glass); border: 1px solid var(--brd);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  box-shadow: 0 6px 20px rgba(2, 5, 14, .35); font: 400 12px/1.3 'Bricolage Grotesque', sans-serif; color: var(--ink); white-space: nowrap; will-change: transform;
+}
+.tip b { color: var(--acc); font: 700 13px/1.3 'Space Mono', monospace; }
+.tip .nm { display: block; margin-top: 2px; font-size: 10.5px; color: var(--ink-dim); }
+
+.maplibregl-ctrl-group {
+  background: var(--glass) !important; border: 1px solid var(--brd) !important;
+  box-shadow: var(--shadow) !important; -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+}
+.maplibregl-ctrl-group button + button { border-top: 1px solid var(--brd) !important; }
+.maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(.92); }
+body[data-mode="day"] .maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: none; }
+.maplibregl-ctrl-scale { background: var(--glass) !important; border: 1px solid var(--brd) !important; color: var(--ink) !important; border-radius: 7px; font: 400 10px/1.4 'Space Mono', monospace !important; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+.maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib { background: var(--glass) !important; border-radius: 10px; margin: 0 8px 6px 0; }
+.maplibregl-ctrl-attrib, .maplibregl-ctrl-attrib a { color: var(--ink-dim) !important; font: 400 10px/1.5 'Bricolage Grotesque', sans-serif !important; }
+
+#loader {
+  position: fixed; inset: 0; z-index: 50; display: grid; place-items: center;
+  background: radial-gradient(1100px 640px at 50% 22%, #1d2740 0%, #0a0e1c 78%); transition: opacity .7s;
+}
+#loader.hide { opacity: 0; pointer-events: none; }
+.spin { width: 44px; height: 44px; margin: 0 auto 18px; border-radius: 50%; border: 3px solid rgba(239, 168, 95, .25); border-top-color: #efa85f; animation: spin 900ms linear infinite; }
+@keyframes spin { to { transform: rotate(1turn); } }
+.load-title { text-align: center; font-size: 30px; font-weight: 800; letter-spacing: .26em; padding-left: .26em; color: #eef1f8; }
+.load-title span { color: #efa85f; }
+.load-sub { margin-top: 10px; text-align: center; font: 400 12px/1.6 'Bricolage Grotesque', sans-serif; letter-spacing: .06em; color: rgba(238, 241, 248, .55); }
+
+@media (max-width: 780px) {
+  .legend { display: none; }
+  .brand { top: 12px; left: 12px; padding: 9px 12px 9px 10px; gap: 9px; }
+  .brand h1 { font-size: 13px; }
+  .brand .sub { display: none; }
+  .logo { width: 28px; height: 28px; }
+  .logo svg { width: 16px; height: 16px; }
+  .controls { top: 12px; right: 12px; width: 168px; padding: 10px; }
+  .hint { font-size: 9.5px; }
+  .chips-wrap { left: 12px; bottom: 12px; width: min(302px, calc(100vw - 24px)); }
+  #chips { max-height: 116px; }
+}
+</style>
+</head>
+<body data-mode="dusk">
+<!--
+DIRECTION CONTRACT — PARIS 3D
+THESIS : la ville est la page — un document cartographique vivant aux dimensions réelles, pas une maquette décorative ; le HUD encadre, il n'occupe jamais le relief.
+OWN-WORLD : nuit bleu-ardoise, panneaux verre fumé, encre ivoire, accent safran unique, filets 1px, rayons 14-16px, pictos SVG traits 1.7px ; titres Bricolage Grotesque, mesures Space Mono ; balise Jour : verre blanc, encre brune, accent terracotta.
+STORY : en 3 secondes, le visiteur comprend que Paris est vraie et mesurable ; il vole vers un monument, bascule crépuscule/jour, lit "≈ 42 m" au curseur, échelle métrique en pied.
+FIRST VIEWPORT : plein écran, Paris au pitch ~60°, vol d'approche vers la Tour Eiffel ; logo haut-gauche, actions haut-droite, destinations bas-gauche, légende bas-centre, navigation bas-droite.
+FORM : build direct de précision sur brief épinglé (crépuscule+jour, kit complet, HTML statique) ; pas de roll concept, demande précise.
+FINISH : unreviewed and undocumented is unfinished ; this build ends with the finish review, the verdict, and DESIGN.md.
+-->
+<div id="map"></div>
+<div class="vignette"></div>
+
+<header class="brand panel">
+  <div class="logo" aria-hidden="true">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 2.8 C11 8.2 9.2 12.4 7 21"/>
+      <path d="M12 2.8 C13 8.2 14.8 12.4 17 21"/>
+      <path d="M6.4 21 H17.6"/>
+      <path d="M9.1 10.6 H14.9"/>
+      <path d="M8.2 15.4 H15.8"/>
+    </svg>
+  </div>
+  <div>
+    <h1>PARIS<span>·3D</span></h1>
+    <div class="sub">Vue aérienne — dimensions réelles</div>
+  </div>
+</header>
+
+<aside class="controls panel" aria-label="Réglages de vue">
+  <div class="seg" role="group" aria-label="Ambiance">
+    <button class="seg-btn active" data-mode="dusk">Crépuscule</button>
+    <button class="seg-btn" data-mode="day">Jour</button>
+  </div>
+  <button id="btnTour" class="toggle" aria-pressed="false">Auto-survol</button>
+  <button id="btnOrbit" class="toggle" aria-pressed="false">Orbite</button>
+  <p class="hint">Glisser pour pivoter, molette pour zoomer.<br>Survoler un bâtiment affiche sa hauteur réelle.</p>
+</aside>
+
+<div class="chips-wrap panel">
+  <div class="grouplabel">Voler vers</div>
+  <div id="chips" role="group" aria-label="Destinations"></div>
+  <div class="credits">Hauteurs et empreintes réelles — © contributeurs OpenStreetMap · tuiles OpenFreeMap · MapLibre GL</div>
+</div>
+
+<div class="legend panel">
+  <div class="grouplabel">Hauteur des bâtiments</div>
+  <div class="bar" id="legendBar"></div>
+  <div class="l-scale"><span>0 m</span><span>150 m</span><span>320 m et +</span></div>
+</div>
+
+<div class="tip" id="tip" role="status"></div>
+
+<div id="loader">
+  <div>
+    <div class="spin" aria-hidden="true"></div>
+    <div class="load-title">PARIS<span>·3D</span></div>
+    <div class="load-sub" id="loadMsg">Approche de la ville…</div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var tip = $('tip'), loader = $('loader'), loadMsg = $('loadMsg');
+  var REDUCED = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var STARTMODE = new URLSearchParams(location.search).get('mode') === 'day' ? 'day' : 'dusk';
+  var DEBUG = new URLSearchParams(location.search).has('debug');
+  var EVS = [];
+  function dbg(m) {
+    if (!DEBUG || !loadMsg.parentNode) return;
+    EVS.push(String(m).slice(0, 90));
+    if (EVS.length > 3) EVS.shift();
+    loadMsg.textContent = EVS.join(' | ');
+  }
+
+  var PALETTE = {
+    dusk: {
+      dim: '#0d1424', dimOp: 0.6,
+      stops: [[0, '#2f3550'], [14, '#3e4669'], [45, '#5a5a86'], [95, '#7f6a90'], [150, '#a86f86'], [230, '#d3876e'], [320, '#f2b06e']],
+      fog: { color: 'rgba(24,31,52,0.5)', high: 'rgba(78,98,150,0.35)', horizon: 0.18, space: '#0a0e1c' }
+    },
+    day: {
+      dim: '#ffffff', dimOp: 0,
+      stops: [[0, '#e6ebf2'], [14, '#d2dce7'], [45, '#b6c6d8'], [95, '#94acca'], [150, '#7894b8'], [230, '#5f7ca4'], [320, '#f0a55a']],
+      fog: { color: 'rgba(212,225,242,0.42)', high: 'rgba(255,255,255,0.3)', horizon: 0.12, space: '#9cb3d7' }
+    }
+  };
+
+  var OVERVIEW = { label: 'Vue générale', center: [2.3360, 48.8532], zoom: 13.9, pitch: 58, bearing: -14, dur: 5200 };
+  var LANDMARKS = [
+    { label: 'Tour Eiffel', center: [2.2945, 48.8582], zoom: 16.3, pitch: 62, bearing: -32, dur: 5200 },
+    { label: 'Arc de Triomphe', center: [2.2950, 48.8738], zoom: 16.5, pitch: 63, bearing: 28, dur: 5200 },
+    { label: 'Concorde', center: [2.3212, 48.8662], zoom: 16.2, pitch: 58, bearing: -38, dur: 5200 },
+    { label: 'Louvre', center: [2.3378, 48.8606], zoom: 16.7, pitch: 60, bearing: 12, dur: 5200 },
+    { label: 'Notre-Dame', center: [2.3499, 48.8530], zoom: 16.6, pitch: 60, bearing: -14, dur: 5200 },
+    { label: 'Hôtel de Ville', center: [2.3522, 48.8566], zoom: 16.7, pitch: 60, bearing: -25, dur: 5200 },
+    { label: 'Bastille', center: [2.3690, 48.8531], zoom: 16.6, pitch: 60, bearing: 20, dur: 5200 },
+    { label: 'Tour Montparnasse', center: [2.3220, 48.8420], zoom: 16.6, pitch: 62, bearing: -40, dur: 5200 },
+    { label: 'Panthéon', center: [2.3455, 48.8462], zoom: 16.8, pitch: 60, bearing: -30, dur: 5200 },
+    { label: 'Invalides', center: [2.3125, 48.8566], zoom: 16.4, pitch: 60, bearing: -35, dur: 5200 },
+    { label: 'Opéra Garnier', center: [2.3316, 48.8720], zoom: 16.9, pitch: 62, bearing: -18, dur: 5200 },
+    { label: 'Sacré-Cœur', center: [2.3431, 48.8865], zoom: 16.5, pitch: 62, bearing: -20, dur: 5200 },
+    { label: 'La Défense', center: [2.2372, 48.8917], zoom: 15.5, pitch: 60, bearing: 12, dur: 5600 }
+  ];
+
+  if (typeof maplibregl === 'undefined') {
+    loadMsg.textContent = 'Connexion internet requise : bibliothèque MapLibre introuvable (CDN).';
+    return;
+  }
+
+  var map;
+  fetch('https://tiles.openfreemap.org/styles/liberty', { headers: { Accept: 'application/json' } })
+    .then(function (r) { return r.json(); })
+    .then(function (st) {
+      var styleObj = JSON.parse(JSON.stringify(st).split('"name_en"').join('"name_fr"'));
+      boot(styleObj);
+    })
+    .catch(function (err) {
+      showError('Style inaccessible : ' + err.message);
+    });
+
+  function boot(style) {
+    map = new maplibregl.Map({
+      container: 'map',
+      style: style,
+      center: [2.3360, 48.8532],
+      zoom: 12.6,
+      pitch: 30,
+      bearing: 0,
+      maxPitch: 75,
+      fadeDuration: 200
+    });
+    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'bottom-right');
+    map.addControl(new maplibregl.ScaleControl({ unit: 'metric', maxWidth: 110 }), 'bottom-right');
+
+    var loaded = false;
+    try {
+      var dc = document.createElement('canvas');
+      var dg = dc.getContext('webgl2') || dc.getContext('webgl');
+      dbg('webgl ' + (dg ? 'ok' : 'NULL'));
+    } catch (err) { dbg('webgl throw ' + err.message); }
+    map.on('style.load', function () { dbg('style.load'); });
+    map.on('sourcedata', function (e) {
+      if (e && e.sourceId !== undefined && e.isSourceLoaded !== undefined && (!e.tile || e.tile.id === undefined)) {
+        dbg('sourcedata ' + e.sourceId + ' ' + (e.isSourceLoaded ? 'loaded' : 'pending'));
+      }
+    });
+    map.on('idle', function () { dbg('idle'); });
+    window.addEventListener('error', function (e) {
+      if (DEBUG) dbg('WINERR ' + ((e && e.message) || String(e).slice(0, 60)));
+      if (!loaded && e && e.message) showError(e.message);
+    });
+    map.on('error', function (e) {
+      if (DEBUG) dbg('ERR ' + ((e && e.error && e.error.message) || String(e).slice(0, 90)));
+      if (!loaded && e && (e.error || e.message)) showError((e.error && e.error.message) || String(e.message));
+    });
+    function showError(msg) {
+      if (loadMsg.parentNode) loadMsg.textContent = 'Erreur : ' + msg;
+    }
+    map.on('load', function () {
+      dbg('MAP LOAD');
+      loaded = true;
+      setup();
+      dbg('SETUP OK');
+      updateLegend(mode);
+      intro();
+      loader.classList.add('hide');
+      dbg('LOADER HIDING');
+      setTimeout(function () { if (loader.parentNode) loader.parentNode.removeChild(loader); }, 900);
+    });
+    setTimeout(function () {
+      if (!loaded && loadMsg.parentNode) {
+        loadMsg.textContent = 'Chargement lent — vérifier la connexion internet (tuiles + CDN).';
+      }
+    }, 8000);
+
+    function colorExpr(stops) {
+      var expr = ['interpolate', ['linear'], ['coalesce', ['get', 'render_height'], 12]];
+      for (var i = 0; i < stops.length; i++) { expr.push(stops[i][0], stops[i][1]); }
+      return expr;
+    }
+
+    function setup() {
+      var style = map.getStyle();
+      var names = Object.keys(style.sources || {});
+      var src = names.filter(function (k) { return /openmaptiles/i.test(k); })[0]
+        || names.filter(function (k) { return style.sources[k].type === 'vector'; })[0]
+        || 'openmaptiles';
+      (style.layers || []).forEach(function (l) { if (l.type === 'fill-extrusion') map.removeLayer(l.id); });
+      var firstSymbol = null;
+      for (var i = 0; i < (style.layers || []).length; i++) {
+        if (style.layers[i].type === 'symbol') { firstSymbol = style.layers[i].id; break; }
+      }
+      map.addLayer({ id: 'dim', type: 'background', paint: { 'background-color': PALETTE.dusk.dim, 'background-opacity': PALETTE.dusk.dimOp } }, firstSymbol || undefined);
+      map.addLayer({
+        id: 'buildings-3d',
+        type: 'fill-extrusion',
+        source: src,
+        'source-layer': 'building',
+        minzoom: 12.5,
+        paint: {
+          'fill-extrusion-color': colorExpr(PALETTE.dusk.stops),
+          'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 12],
+          'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0],
+          'fill-extrusion-vertical-gradient': true,
+          'fill-extrusion-opacity': 0.97
+        }
+      });
+      applyMode(STARTMODE);
+      document.querySelectorAll('.seg-btn').forEach(function (b) { b.classList.toggle('active', b.dataset.mode === STARTMODE); });
+      bindTooltip();
+      bindUserStops();
+    }
+
+    var mode = 'dusk';
+    function applyMode(m) {
+      mode = m;
+      var p = PALETTE[m];
+      if (map.getLayer('buildings-3d')) map.setPaintProperty('buildings-3d', 'fill-extrusion-color', colorExpr(p.stops));
+      if (map.getLayer('dim')) {
+        map.setPaintProperty('dim', 'background-color', p.dim);
+        map.setPaintProperty('dim', 'background-opacity', p.dimOp);
+      }
+      if (typeof map.setFog === 'function') {
+        map.setFog({ color: p.fog.color, highColor: p.fog.high, horizonBlend: p.fog.horizon, spaceColor: p.fog.space });
+      }
+      document.body.dataset.mode = m;
+    }
+
+    function updateLegend(m) {
+      var stops = PALETTE[m].stops, max = 320, css = [];
+      for (var i = 0; i < stops.length; i++) css.push(stops[i][1] + ' ' + ((stops[i][0] / max) * 100).toFixed(1) + '%');
+      $('legendBar').style.background = 'linear-gradient(90deg,' + css.join(',') + ')';
+    }
+
+    document.querySelectorAll('.seg-btn').forEach(function (b) {
+      b.addEventListener('click', function () {
+        document.querySelectorAll('.seg-btn').forEach(function (x) { x.classList.toggle('active', x === b); });
+        applyMode(b.dataset.mode);
+        updateLegend(b.dataset.mode);
+      });
+    });
+
+    function flyToLandmark(l) {
+      if (REDUCED) {
+        map.jumpTo({ center: l.center, zoom: l.zoom, pitch: l.pitch, bearing: l.bearing });
+      } else {
+        map.flyTo({ center: l.center, zoom: l.zoom, pitch: l.pitch, bearing: l.bearing, duration: l.dur, essential: true });
+      }
+    }
+
+    function intro() {
+      setActive(1);
+      if (REDUCED) { flyToLandmark(LANDMARKS[0]); return; }
+      setTimeout(function () { flyToLandmark(LANDMARKS[0]); }, 400);
+    }
+
+    var chipsEl = $('chips'), chips = [];
+    [OVERVIEW].concat(LANDMARKS).forEach(function (l, i) {
+      var b = document.createElement('button');
+      b.className = 'chip' + (i === 0 ? ' active' : '');
+      b.textContent = l.label;
+      b.addEventListener('click', function () {
+        stopTour(); stopOrbit();
+        setActive(i);
+        flyToLandmark(l);
+      });
+      chipsEl.appendChild(b);
+      chips.push(b);
+    });
+    function setActive(i) { chips.forEach(function (el, k) { el.classList.toggle('active', k === i); }); }
+
+    var btnTour = $('btnTour'), btnOrbit = $('btnOrbit');
+    var touring = false, tourTimer = null, tourIdx = 0;
+    function startTour() {
+      touring = true; btnTour.classList.add('on'); btnTour.setAttribute('aria-pressed', 'true');
+      setActive(-1);
+      nextStop();
+    }
+    function nextStop() {
+      var l = LANDMARKS[tourIdx % LANDMARKS.length];
+      tourIdx++;
+      flyToLandmark(l);
+      if (!REDUCED) tourTimer = setTimeout(nextStop, l.dur + 800);
+      else tourTimer = setTimeout(nextStop, 3000);
+    }
+    function stopTour() {
+      if (!touring) return;
+      touring = false; clearTimeout(tourTimer);
+      btnTour.classList.remove('on'); btnTour.setAttribute('aria-pressed', 'false');
+    }
+    btnTour.addEventListener('click', function () { touring ? stopTour() : startTour(); });
+
+    var orbiting = false, orbitRaf = null;
+    function startOrbit() {
+      orbiting = true; btnOrbit.classList.add('on'); btnOrbit.setAttribute('aria-pressed', 'true');
+      var step = function () {
+        map.setBearing(map.getBearing() + (REDUCED ? 0.16 : 0.08));
+        orbitRaf = window.requestAnimationFrame(step);
+      };
+      orbitRaf = window.requestAnimationFrame(step);
+    }
+    function stopOrbit() {
+      if (!orbiting) return;
+      orbiting = false; window.cancelAnimationFrame(orbitRaf);
+      btnOrbit.classList.remove('on'); btnOrbit.setAttribute('aria-pressed', 'false');
+    }
+    btnOrbit.addEventListener('click', function () { orbiting ? stopOrbit() : startOrbit(); });
+
+    function bindUserStops() {
+      var cv = map.getCanvas();
+      var stop = function () { stopTour(); stopOrbit(); };
+      cv.addEventListener('mousedown', stop);
+      cv.addEventListener('wheel', stop, { passive: true });
+      cv.addEventListener('touchstart', stop, { passive: true });
+    }
+
+    function bindTooltip() {
+      var cv = map.getCanvas();
+      var last = 0;
+      var esc = function (s) {
+        return String(s).replace(/[&<>"']/g, function (c) {
+          return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+      };
+      cv.addEventListener('mousemove', function (e) {
+        tip.style.transform = 'translate(' + Math.min(e.clientX + 14, window.innerWidth - 140) + 'px,' + Math.min(e.clientY + 16, window.innerHeight - 60) + 'px)';
+        var now = performance.now();
+        if (now - last < 60) return;
+        last = now;
+        if (map.getZoom() < 13.5) { tip.style.opacity = '0'; return; }
+        var fs = map.queryRenderedFeatures(e.point, { layers: ['buildings-3d'] });
+        var f = fs && fs[0];
+        var h = f ? (Number(f.properties && f.properties.render_height) || 0) : 0;
+        if (!f || h <= 0) { tip.style.opacity = '0'; return; }
+        var nm = f.properties && f.properties.name;
+        tip.innerHTML = '<b>≈ ' + Math.round(h) + ' m</b>' + (nm ? '<span class="nm">' + esc(nm) + '</span>' : '');
+        tip.style.opacity = '1';
+      });
+      cv.addEventListener('mouseleave', function () { tip.style.opacity = '0'; });
+      map.on('movestart', function () { tip.style.opacity = '0'; });
+    }
+  }
+})();
+</script>
+</body>
+</html>
