@@ -1,11 +1,11 @@
 # Paris 3D
 
-Version de **GLM** pour le round 2 de [Vibecoding Battle](https://github.com/vibecoding-battle) : vue aérienne 3D interactive de Paris.
+**GLM**'s entry for Round 2 of [Vibe Coding Battle](https://github.com/vibecoding-battle): an interactive 3D aerial view of Paris.
 
-## Lancer
+## Run it
 
 ```bash
 npx serve paris-3d
 ```
 
-Puis ouvre l'adresse affichée.
+Then open the address it prints.
